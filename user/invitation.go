@@ -78,3 +78,14 @@ func (iv Invitation) ClientID() string {
 func (iv Invitation) Callback() *url.URL {
 	return assertURLClaim(iv.Claims, ClaimInvitationCallback)
 }
+
+func (iv Invitation) PasswordReset(issuer url.URL, expires time.Duration) PasswordReset {
+	return NewPasswordReset(
+		iv.UserID(),
+		iv.Password(),
+		issuer,
+		iv.ClientID(),
+		*iv.Callback(),
+		expires,
+	)
+}

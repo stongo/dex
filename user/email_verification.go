@@ -5,15 +5,9 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/jonboulle/clockwork"
-
 	"github.com/coreos/go-oidc/jose"
 	"github.com/coreos/go-oidc/key"
 	"github.com/coreos/go-oidc/oidc"
-)
-
-var (
-	clock = clockwork.NewRealClock()
 )
 
 // NewEmailVerification creates an object which can be sent to a user
