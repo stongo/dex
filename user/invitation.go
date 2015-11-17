@@ -18,6 +18,10 @@ func NewInvitation(user User, password Password, issuer url.URL, clientID string
 	return Invitation{claims}
 }
 
+// An Invitation is a token that can be used for verifying an email
+// address and resetting a password in a single stroke. It will be
+// sent as part of a link in an email automatically to newly created
+// users if email is configured.
 type Invitation struct {
 	Claims jose.Claims
 }
