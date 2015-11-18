@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"fmt"
 	htmltemplate "html/template"
 	"net/http"
 	"net/http/httptest"
@@ -18,13 +17,8 @@ import (
 
 	"github.com/coreos/dex/email"
 	"github.com/coreos/dex/pkg/html"
-	"github.com/coreos/dex/pkg/log"
 	"github.com/coreos/dex/user"
 )
-
-func init() {
-	log.EnableDebug()
-}
 
 func TestSendResetPasswordEmailHandler(t *testing.T) {
 	str := func(s string) []string {
@@ -361,35 +355,9 @@ func TestSendResetPasswordEmailHandler(t *testing.T) {
 	}
 }
 
-type resetPasswordTestCase struct {
-	userID string
-	query  url.Values
-
-	method   string
-	path     string
-	verified bool
-
-	wantFormValues *url.Values
-	wantCode       int
-	wantPassword   string
-}
-
 func TestResetPasswordHandler(t *testing.T) {
-	rpwUserID := "ID-1"
-	rpwGoodSigner := key.NewPrivateKeySet([]*key.PrivateKey{testPrivKey},
-		time.Now().Add(time.Minute)).Active().Signer()
-
-	badKey, err := key.GeneratePrivateKey()
-	if err != nil {
-		panic(fmt.Sprintf("couldn't make new key: %q", err))
-	}
-
-	rpwBadSigner := key.NewPrivateKeySet([]*key.PrivateKey{badKey},
-		time.Now().Add(time.Minute)).Active().Signer()
-
-	makePRToken := func(password, clientID string, callback url.URL, expires time.Duration, signer jose.Signer) string {
-		pr := user.NewPasswordReset(
-			rpwUserID,
+	makeToken := func(userID, password, clientID string, callback url.URL, expires time.Duration, signer jose.Signer) string {
+		pr := user.NewPasswordReset("ID-1",
 			user.Password(password),
 			testIssuerURL,
 			clientID,
@@ -403,153 +371,18 @@ func TestResetPasswordHandler(t *testing.T) {
 		token := jwt.Encode()
 		return token
 	}
+	goodSigner := key.NewPrivateKeySet([]*key.PrivateKey{testPrivKey},
+		time.Now().Add(time.Minute)).Active().Signer()
 
-	tests := []resetPasswordTestCase{
-		// Scenario 1: Happy Path
-		resetPasswordTestCase{ // Case 0
-			// Step 1.1 - User clicks link in email, has valid token.
-			userID: rpwUserID,
-			query: url.Values{
-				"token": []string{makePRToken("password", testClientID, testRedirectURL, time.Hour*1, rpwGoodSigner)},
-			},
-			method:   "GET",
-			path:     httpPathResetPassword,
-			verified: false,
+	badKey, err := key.GeneratePrivateKey()
+	if err != nil {
+		t.Fatalf("couldn't make new key: %q", err)
+	}
+	badSigner := key.NewPrivateKeySet([]*key.PrivateKey{badKey},
+		time.Now().Add(time.Minute)).Active().Signer()
 
-			wantCode: http.StatusOK,
-			wantFormValues: &url.Values{
-				"password": []string{""},
-				"token":    []string{makePRToken("password", testClientID, testRedirectURL, time.Hour*1, rpwGoodSigner)},
-			},
-			wantPassword: "password",
-		},
-		resetPasswordTestCase{ // Case 1
-			// Step 1.2 - User enters in new valid password, password is changed, user is redirected.
-			userID: rpwUserID,
-			query: url.Values{
-				"token":    []string{makePRToken("password", testClientID, testRedirectURL, time.Hour*1, rpwGoodSigner)},
-				"password": []string{"new_password"},
-			},
-			method:   "POST",
-			path:     httpPathResetPassword,
-			verified: false,
-
-			wantCode:       http.StatusSeeOther,
-			wantFormValues: &url.Values{},
-			wantPassword:   "NEW_PASSWORD",
-		},
-		// Scenario 2: Happy Path, but without redirect.
-		resetPasswordTestCase{ // Case 2
-			// Step 2.1 - User clicks link in email, has valid token.
-			userID: rpwUserID,
-			query: url.Values{
-				"token": []string{makePRToken("password", testClientID, url.URL{}, time.Hour*1, rpwGoodSigner)},
-			},
-			method:   "GET",
-			path:     httpPathResetPassword,
-			verified: false,
-
-			wantCode: http.StatusOK,
-			wantFormValues: &url.Values{
-				"password": []string{""},
-				"token":    []string{makePRToken("password", testClientID, url.URL{}, time.Hour*1, rpwGoodSigner)},
-			},
-			wantPassword: "password",
-		},
-		resetPasswordTestCase{ // Case 3
-			// Step 2.2 - User enters in new valid password, password is changed, user is redirected.
-			userID: rpwUserID,
-			query: url.Values{
-				"token":    []string{makePRToken("password", testClientID, url.URL{}, time.Hour*1, rpwGoodSigner)},
-				"password": []string{"new_password"},
-			},
-			method:   "POST",
-			path:     httpPathResetPassword,
-			verified: false,
-
-			// no redirect
-			wantCode:       http.StatusOK,
-			wantFormValues: &url.Values{},
-			wantPassword:   "NEW_PASSWORD",
-		},
-		// Errors
-		resetPasswordTestCase{ // Case 4
-			// Step 1.1.1 - User clicks link in email, has invalid token.
-			userID: rpwUserID,
-			query: url.Values{
-				"token": []string{makePRToken("password", testClientID, testRedirectURL, time.Hour*1, rpwBadSigner)},
-			},
-			method:   "GET",
-			path:     httpPathResetPassword,
-			verified: false,
-
-			wantCode:       http.StatusBadRequest,
-			wantFormValues: &url.Values{},
-			wantPassword:   "password",
-		},
-		resetPasswordTestCase{ // Case 5
-			// Step 2.2.1 - User enters in new valid password, password is changed, no redirect
-			userID: rpwUserID,
-			query: url.Values{
-				"token":    []string{makePRToken("password", testClientID, url.URL{}, time.Hour*1, rpwGoodSigner)},
-				"password": []string{"shrt"},
-			},
-			method:   "POST",
-			path:     httpPathResetPassword,
-			verified: false,
-
-			// no redirect
-			wantCode: http.StatusBadRequest,
-			wantFormValues: &url.Values{
-				"password": []string{""},
-				"token":    []string{makePRToken("password", testClientID, url.URL{}, time.Hour*1, rpwGoodSigner)},
-			},
-			wantPassword: "password",
-		},
-		resetPasswordTestCase{ // Case 6
-			// Step 2.2.2 - User enters in new valid password, with suspicious token.
-			userID: rpwUserID,
-			query: url.Values{
-				"token":    []string{makePRToken("password", testClientID, url.URL{}, time.Hour*1, rpwBadSigner)},
-				"password": []string{"shrt"},
-			},
-			method:   "POST",
-			path:     httpPathResetPassword,
-			verified: false,
-
-			// no redirect
-			wantCode:       http.StatusBadRequest,
-			wantFormValues: &url.Values{},
-			wantPassword:   "password",
-		},
-		resetPasswordTestCase{ // Case 7
-			// Token lacking client id
-			userID: rpwUserID,
-			query: url.Values{
-				"token":    []string{makePRToken("password", "", url.URL{}, time.Hour*1, rpwGoodSigner)},
-				"password": []string{"shrt"},
-			},
-			method:   "GET",
-			path:     httpPathResetPassword,
-			verified: false,
-
-			wantCode:     http.StatusBadRequest,
-			wantPassword: "password",
-		},
-		resetPasswordTestCase{ // Case 8
-			// Token lacking client id
-			userID: rpwUserID,
-			query: url.Values{
-				"token":    []string{makePRToken("password", "", url.URL{}, time.Hour*1, rpwGoodSigner)},
-				"password": []string{"shrt"},
-			},
-			method:   "POST",
-			path:     httpPathResetPassword,
-			verified: false,
-
-			wantCode:     http.StatusBadRequest,
-			wantPassword: "password",
-		},
+	str := func(s string) []string {
+		return []string{s}
 	}
 
 	user.PasswordHasher = func(s string) ([]byte, error) {
@@ -559,13 +392,142 @@ func TestResetPasswordHandler(t *testing.T) {
 		user.PasswordHasher = user.DefaultPasswordHasher
 	}()
 
+	tests := []struct {
+		query url.Values
+
+		method string
+
+		wantFormValues *url.Values
+		wantCode       int
+		wantPassword   string
+	}{
+		// Scenario 1: Happy Path
+		{ // Case 0
+			// Step 1.1 - User clicks link in email, has valid token.
+			query: url.Values{
+				"token": str(makeToken("ID-1", "password", testClientID, testRedirectURL, time.Hour*1, goodSigner)),
+			},
+			method: "GET",
+
+			wantCode: http.StatusOK,
+			wantFormValues: &url.Values{
+				"password": str(""),
+				"token":    str(makeToken("ID-1", "password", testClientID, testRedirectURL, time.Hour*1, goodSigner)),
+			},
+			wantPassword: "password",
+		},
+		{ // Case 1
+			// Step 1.2 - User enters in new valid password, password is changed, user is redirected.
+			query: url.Values{
+				"token":    str(makeToken("ID-1", "password", testClientID, testRedirectURL, time.Hour*1, goodSigner)),
+				"password": str("new_password"),
+			},
+			method: "POST",
+
+			wantCode:       http.StatusSeeOther,
+			wantFormValues: &url.Values{},
+			wantPassword:   "NEW_PASSWORD",
+		},
+		// Scenario 2: Happy Path, but without redirect.
+		{ // Case 2
+			// Step 2.1 - User clicks link in email, has valid token.
+			query: url.Values{
+				"token": str(makeToken("ID-1", "password", testClientID, url.URL{}, time.Hour*1, goodSigner)),
+			},
+			method: "GET",
+
+			wantCode: http.StatusOK,
+			wantFormValues: &url.Values{
+				"password": str(""),
+				"token":    str(makeToken("ID-1", "password", testClientID, url.URL{}, time.Hour*1, goodSigner)),
+			},
+			wantPassword: "password",
+		},
+		{ // Case 3
+			// Step 2.2 - User enters in new valid password, password is changed, user is redirected.
+			query: url.Values{
+				"token":    str(makeToken("ID-1", "password", testClientID, url.URL{}, time.Hour*1, goodSigner)),
+				"password": str("new_password"),
+			},
+			method: "POST",
+
+			// no redirect
+			wantCode:       http.StatusOK,
+			wantFormValues: &url.Values{},
+			wantPassword:   "NEW_PASSWORD",
+		},
+		// Errors
+		{ // Case 4
+			// Step 1.1.1 - User clicks link in email, has invalid token.
+			query: url.Values{
+				"token": str(makeToken("ID-1", "password", testClientID, testRedirectURL, time.Hour*1, badSigner)),
+			},
+			method: "GET",
+
+			wantCode:       http.StatusBadRequest,
+			wantFormValues: &url.Values{},
+			wantPassword:   "password",
+		},
+
+		{ // Case 5
+			// Step 2.2.1 - User enters in new valid password, password is changed, no redirect
+			query: url.Values{
+				"token":    str(makeToken("ID-1", "password", testClientID, url.URL{}, time.Hour*1, goodSigner)),
+				"password": str("shrt"),
+			},
+			method: "POST",
+
+			// no redirect
+			wantCode: http.StatusBadRequest,
+			wantFormValues: &url.Values{
+				"password": str(""),
+				"token":    str(makeToken("ID-1", "password", testClientID, url.URL{}, time.Hour*1, goodSigner)),
+			},
+			wantPassword: "password",
+		},
+		{ // Case 6
+			// Step 2.2.2 - User enters in new valid password, with suspicious token.
+			query: url.Values{
+				"token":    str(makeToken("ID-1", "password", testClientID, url.URL{}, time.Hour*1, badSigner)),
+				"password": str("shrt"),
+			},
+			method: "POST",
+
+			// no redirect
+			wantCode:       http.StatusBadRequest,
+			wantFormValues: &url.Values{},
+			wantPassword:   "password",
+		},
+		{ // Case 7
+			// Token lacking client id
+			query: url.Values{
+				"token":    str(makeToken("ID-1", "password", "", url.URL{}, time.Hour*1, goodSigner)),
+				"password": str("shrt"),
+			},
+			method: "GET",
+
+			wantCode:     http.StatusBadRequest,
+			wantPassword: "password",
+		},
+		{ // Case 8
+			// Token lacking client id
+			query: url.Values{
+				"token":    str(makeToken("ID-1", "password", "", url.URL{}, time.Hour*1, goodSigner)),
+				"password": str("shrt"),
+			},
+			method: "POST",
+
+			wantCode:     http.StatusBadRequest,
+			wantPassword: "password",
+		},
+	}
 	for i, tt := range tests {
 		f, err := makeTestFixtures()
 		if err != nil {
 			t.Fatalf("case %d: could not make test fixtures: %v", i, err)
 		}
 
-		hdlr := &ResetPasswordHandler{
+		hdlr := ResetPasswordHandler{
 			tpl:       f.srv.ResetPasswordTemplate,
 			issuerURL: testIssuerURL,
 			um:        f.srv.UserManager,
@@ -575,7 +537,7 @@ func TestResetPasswordHandler(t *testing.T) {
 		w := httptest.NewRecorder()
 		var req *http.Request
 		u := testIssuerURL
-		u.Path = tt.path
+		u.Path = httpPathResetPassword
 		if tt.method == "POST" {
 			req, err = http.NewRequest(tt.method, u.String(), strings.NewReader(tt.query.Encode()))
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -606,7 +568,7 @@ func TestResetPasswordHandler(t *testing.T) {
 				t.Logf("case %d: Body: %v ", i, w.Body)
 			}
 		}
-		pwi, err := f.srv.PasswordInfoRepo.Get(nil, tt.userID)
+		pwi, err := f.srv.PasswordInfoRepo.Get(nil, "ID-1")
 		if err != nil {
 			t.Errorf("case %d: Error getting Password info: %v", i, err)
 		}
@@ -614,14 +576,6 @@ func TestResetPasswordHandler(t *testing.T) {
 			t.Errorf("case %d: wantPassword=%v, got=%v", i, tt.wantPassword, string(pwi.Password))
 		}
 
-		user, err := f.srv.UserManager.Get(tt.userID)
-		if err != nil {
-			t.Fatalf("case %d: unexpected error: %v", i, err)
-		}
-
-		if tt.verified != user.EmailVerified {
-			t.Errorf("case %d: want emailVerified: %v got: %v", i, tt.verified, user.EmailVerified)
-		}
 	}
 }
 
